@@ -12,7 +12,11 @@ def inversefunc(func,
                 image=None,
                 open_domain=None,
                 args=(),
-                accuracy=2):
+                accuracy=2,
+                tolerance = 1.e-4,
+                do_confirmAccuracy = False,
+                do_returnResults = False
+                ):
     r"""Obtain the inverse of a function.
 
     Returns the numerical inverse of the function `f`. It may return a callable
@@ -121,24 +125,27 @@ def inversefunc(func,
     if ymax is None:
         ymax = _auto_ymax(func, args, xmin, xmax, trend)
 
-    # Creating bounded function
+    # Creating bounded function. If outside of bounds, returns an infinity (so the optimizer doesn't choose that value)
     def bounded_f(x):
         if xmin is not None and (x < xmin or (x == xmin and xmin_open)):
-                val = -1 * np.inf * trend
+            val = -1 * np.inf * trend
         elif xmax is not None and (x > xmax or (x == xmax and xmax_open)):
-                val = np.inf * trend
+            val = np.inf * trend
         else:
             val = func(x, *args)
         return val
 
     min_kwargs = {}
     min_kwargs['bracket'] = (ref1, ref2)
-    min_kwargs['tol'] = 1.48e-08
+    min_kwargs['tol'] = tolerance
     min_kwargs['method'] = 'Brent'
-
+    
+    ## inverse function. calculating inverse for input yin...
     def inv(yin):
         yin = np.asarray(yin, dtype=np.float64)
         shapein = yin.shape
+        
+        # just applying the inverse to all the values in yin...
         yin = yin.flatten()
         if ymin is not None:
             if (xmin_open and trend == 1) or (xmax_open and trend == -1):
@@ -161,8 +168,11 @@ def inversefunc(func,
 
         results = yin.copy() * np.nan
         resultsmask = np.zeros(yin.shape, dtype=np.bool)
-
+        
+        ## where the yin is mapped back to original noninversed space
         for j in range(yin.size):
+            yval = yin[j]
+            # if y 
             if xmax is not None:
                 if bounded_f(xmax) == yin[j]:
                     results[j] = xmax
@@ -173,9 +183,10 @@ def inversefunc(func,
                     results[j] = xmin
                     resultsmask[j] = True
                     continue
-
-            optimizer = (lambda x, j=j,
-                         bounded_f=bounded_f: (((bounded_f(x) - yin[j]))**2))
+            
+            # this function, for input x, for use to find the optimized value.
+            # when np.abs(bounded_f(x) - yval) is minimized, the x satisfying is the inverse f^-1(yval) = x!
+            optimizer = (lambda x, bounded_f=bounded_f: np.abs(bounded_f(x) - yval))
             try:
                 with warnings.catch_warnings(record=True):
                     result = minimize_scalar(optimizer, **min_kwargs)
@@ -183,20 +194,23 @@ def inversefunc(func,
                 resultsmask[j] = result.success
             except:
                 resultsmask[j] = False
-        if any(~resultsmask):
-            warnings.warn("Trouble calculating inverse for values: "
+                
+        if do_returnResults:
+            if any(~resultsmask):
+                warnings.warn("Trouble calculating inverse for values: "
                           "%s" % str(yin[~resultsmask]), RuntimeWarning)
-
-        try:
-            np.testing.assert_array_almost_equal(yin, func(results, *args),
-                                                 decimal=accuracy)
-        except AssertionError:
-            warnings.warn("Results obtained with less than %g "
-                          "decimal digits of accuracy"
-                          % accuracy, RuntimeWarning)
+        
+        if do_confirmAccuracy:
+            try:
+                np.testing.assert_array_almost_equal(yin, func(results, *args),
+                                                     decimal=accuracy)
+            except AssertionError:
+                warnings.warn("Results obtained with less than %g "
+                              "decimal digits of accuracy"
+                              % accuracy, RuntimeWarning)
 
         return results.reshape(shapein)
-
+    
     if y_values is None:
         return inv
     else:
